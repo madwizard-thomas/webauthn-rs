@@ -12,6 +12,7 @@ use windows::{
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
     },
 };
+use windows::core::PCWSTR;
 
 /// Wrapper for [WEBAUTHN_COSE_CREDENTIAL_PARAMETER] to ensure pointer lifetime.
 struct WinCoseCredentialParameter {
@@ -30,7 +31,7 @@ impl WinCoseCredentialParameter {
 
         let native = WEBAUTHN_COSE_CREDENTIAL_PARAMETER {
             dwVersion: WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
-            pwszCredentialType: (&boxed._typ).into(),
+            pwszCredentialType: PCWSTR::from_raw(boxed._typ.as_ptr()),
             lAlg: p.alg as i32,
         };
 

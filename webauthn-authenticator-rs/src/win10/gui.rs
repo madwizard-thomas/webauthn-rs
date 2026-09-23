@@ -43,8 +43,7 @@ use std::{
     thread,
 };
 use windows::{
-    core::{HSTRING, PCWSTR},
-    w,
+    core::{HSTRING, PCWSTR, w},
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::{
@@ -87,16 +86,16 @@ unsafe extern "system" fn window_proc(
 }
 
 /// Window class for our [Window].
-const WINDOW_CLASS: &HSTRING = w!("webauthn-authenticator-rs");
+const WINDOW_CLASS: PCWSTR = w!("webauthn-authenticator-rs");
 
 /// Gets a module handle for the current process and registers
 /// [WINDOW_CLASS] on first run.
 unsafe fn get_module_handle() -> HINSTANCE {
     static INIT: Once = Once::new();
-    static mut MODULE_HANDLE: HINSTANCE = HINSTANCE(0);
+    static mut MODULE_HANDLE: HINSTANCE = HINSTANCE(std::ptr::null_mut());
 
     INIT.call_once(|| {
-        MODULE_HANDLE = GetModuleHandleW(PCWSTR::null()).expect("GetModuleHandleW");
+        MODULE_HANDLE = GetModuleHandleW(PCWSTR::null()).expect("GetModuleHandleW").into();
 
         let icon = LoadIconW(None, IDI_APPLICATION).expect("LoadIconW");
         let wnd_class = WNDCLASSEXW {
@@ -110,7 +109,7 @@ unsafe fn get_module_handle() -> HINSTANCE {
             hCursor: LoadCursorW(None, IDC_ARROW).expect("LoadCursorW"),
             hbrBackground: GetSysColorBrush(COLOR_WINDOW),
             lpszMenuName: PCWSTR::null(),
-            lpszClassName: WINDOW_CLASS.into(),
+            lpszClassName: WINDOW_CLASS,
             hIconSm: icon,
         };
 
@@ -138,7 +137,7 @@ impl Window {
             let parent = unsafe { GetForegroundWindow() };
             let hwnd = unsafe {
                 let hinstance = get_module_handle();
-                let (style, ex_style) = if parent != HWND(0) {
+                let (style, ex_style) = if parent != HWND::default() {
                     // Parent: act like a child tool-window, so it doesn't
                     // appear in alt-tab, but still gets focus.
                     (WS_CHILD, WS_EX_TOOLWINDOW)
@@ -158,9 +157,9 @@ impl Window {
                     CW_USEDEFAULT,
                     1,
                     1,
-                    parent,
+                    Some(parent),
                     None,
-                    hinstance,
+                    Some(hinstance),
                     None,
                 )
             };
