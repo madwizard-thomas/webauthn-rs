@@ -10,7 +10,6 @@ use webauthn_rs_proto::{
 use super::WinWrapper;
 
 use windows::{
-    core::HSTRING,
     core::BOOL,
     Win32::{Networking::WindowsWebServices::*},
 };
@@ -244,15 +243,13 @@ impl TryFrom<&WEBAUTHN_EXTENSION> for WinExtensionGetAssertionResponse {
     /// Reads a [WEBAUTHN_EXTENSION] for a response to a GetAssertion call.
     fn try_from(e: &WEBAUTHN_EXTENSION) -> Result<Self, Self::Error> {
         let id = unsafe {
-            e.pwszExtensionIdentifier
-                .to_string()
-                .map_err(|_| WebauthnCError::Internal)?
+            e.pwszExtensionIdentifier.as_wide()
         };
 
-        match id.as_str() {
+        match id {
             ID_CRED_BLOB => Ok(Self::CredBlob),
             o => {
-                error!("unknown extension: {:?}", o);
+                error!("unknown extension: {:?}", String::from_utf16_lossy(o));
                 Err(WebauthnCError::Internal)
             }
         }

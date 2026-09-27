@@ -7,7 +7,6 @@ use webauthn_rs_proto::{AllowCredentials, AuthenticatorTransport, PublicKeyCrede
 use super::WinWrapper;
 
 use windows::{
-    core::w,
     Win32::Networking::WindowsWebServices::{
         WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST,
         WEBAUTHN_CTAP_TRANSPORT_BLE, WEBAUTHN_CTAP_TRANSPORT_INTERNAL, WEBAUTHN_CTAP_TRANSPORT_NFC,

@@ -43,9 +43,9 @@ use std::{
     thread,
 };
 use windows::{
-    core::{HSTRING, PCWSTR, w},
+    core::{PCWSTR, w},
     Win32::{
-        Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::{
             Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
             Gdi::{GetSysColorBrush, COLOR_WINDOW},
@@ -129,75 +129,27 @@ impl Window {
     ///
     /// The window will persist until dropped.
     pub fn new() -> Result<Self, WebauthnCError> {
-        let (sender, receiver) = sync_channel::<HWND>(0);
 
+        let (sender, receiver) = sync_channel::<Option<Self>>(0);
         thread::spawn(move || {
             // trace!("spawned background");
             // let parent = HWND(0);
-            let parent = unsafe { GetForegroundWindow() };
-            let hwnd = unsafe {
-                let hinstance = get_module_handle();
-                let (style, ex_style) = if parent != HWND::default() {
-                    // Parent: act like a child tool-window, so it doesn't
-                    // appear in alt-tab, but still gets focus.
-                    (WS_CHILD, WS_EX_TOOLWINDOW)
-                } else {
-                    // No parent: act like a normal window so we can be alt-tabbed.
-                    (WS_POPUPWINDOW, WS_EX_LAYERED)
-                };
+            let res = Self::create_window();
 
-                // CreateWindowEx is virtualised for DPI scaling, so we'll need
-                // to MoveWindow later.
-                CreateWindowExW(
-                    WS_EX_TOPMOST | ex_style,
-                    WINDOW_CLASS,
-                    WINDOW_CLASS,
-                    style | WS_VISIBLE,
-                    CW_USEDEFAULT,
-                    CW_USEDEFAULT,
-                    1,
-                    1,
-                    Some(parent),
-                    None,
-                    Some(hinstance),
-                    None,
-                )
+            let hwnd = match res {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = sender.send(None);
+                    return;
+                }
             };
-            // trace!(?hwnd);
 
-            if hwnd == HWND(0) {
-                let e = unsafe { GetLastError() };
-                error!("window not created, {:?}", e);
-                sender.send(hwnd).ok();
+            // Now we can tell the main thread that the window is ready
+            if sender.send(Some(Self { hwnd } )).is_err() {
                 return;
             }
 
-            // Focus, foreground and reposition our window (if needed).
-            unsafe {
-                if !SetForegroundWindow(hwnd).as_bool() {
-                    trace!("Tried to set the foreground window, but the request was denied.");
-                }
-
-                if parent == HWND(0) {
-                    // When we have an un-parented window, make it invisible
-                    // and put it in the centre of the primary screen.
-                    SetLayeredWindowAttributes(hwnd, None, 0, LWA_ALPHA);
-                    Some((
-                        GetSystemMetrics(SM_CXSCREEN) / 2,
-                        GetSystemMetrics(SM_CYSCREEN) / 2,
-                    ))
-                } else {
-                    // When we have a parent window, MoveWindow is relative to the position
-                    // of the parent.
-                    get_window_rect(parent).map(half_size)
-                }
-                .map(|(x, y)| MoveWindow(hwnd, x, y, 1, 1, true));
-            }
-
-            // Now we can tell the main thread that the window is ready.
-            if sender.send(hwnd).is_err() {
-                return;
-            }
+            println!("{:?}", hwnd);
 
             // Windows event loop
             let mut msg: MSG = Default::default();
@@ -209,23 +161,83 @@ impl Window {
 
                 if msg.message == WM_QUIT {
                     unsafe {
-                        PostQuitMessage(msg.wParam.0 as i32);
+                        let _ = PostQuitMessage(msg.wParam.0 as i32);
                     }
                 }
                 // trace!(?msg);
                 unsafe {
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                    let _ = TranslateMessage(&msg);
+                    let _ = DispatchMessageW(&msg);
                 }
             }
+
             // trace!("background stopped");
         });
 
-        let hwnd = receiver.recv();
-        match hwnd {
-            Ok(HWND(0)) | Err(_) => Err(WebauthnCError::Internal),
-            Ok(hwnd) => Ok(Self { hwnd }),
+        match receiver.recv() {
+            Ok(None)|Err(_) => Err(WebauthnCError::Internal),
+            Ok(Some(window)) => Ok(window),
         }
+    }
+
+    fn create_window() -> Result<HWND, WebauthnCError> {
+
+        let parent = unsafe { GetForegroundWindow() };
+        let hwnd = unsafe {
+            let hinstance = get_module_handle();
+            let (style, ex_style) = if parent != HWND::default() {
+                // Parent: act like a child tool-window, so it doesn't
+                // appear in alt-tab, but still gets focus.
+                (WS_CHILD, WS_EX_TOOLWINDOW)
+            } else {
+                // No parent: act like a normal window so we can be alt-tabbed.
+                (WS_POPUPWINDOW, WS_EX_LAYERED)
+            };
+
+            // CreateWindowEx is virtualised for DPI scaling, so we'll need
+            // to MoveWindow later.
+            CreateWindowExW(
+                WS_EX_TOPMOST | ex_style,
+                WINDOW_CLASS,
+                WINDOW_CLASS,
+                style | WS_VISIBLE,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                1,
+                1,
+                Some(parent),
+                None,
+                Some(hinstance),
+                None,
+            ).map_err(|e| {
+                error!("window not created, {:?}", e.code());
+                WebauthnCError::Internal
+            })?
+        };
+        // trace!(?hwnd);
+
+        // Focus, foreground and reposition our window (if needed).
+        unsafe {
+            if !SetForegroundWindow(hwnd).as_bool() {
+                trace!("Tried to set the foreground window, but the request was denied.");
+            }
+
+            if parent.is_invalid() {
+                // When we have an un-parented window, make it invisible
+                // and put it in the centre of the primary screen.
+                SetLayeredWindowAttributes(hwnd, None, 0, LWA_ALPHA);
+                Some((
+                    GetSystemMetrics(SM_CXSCREEN) / 2,
+                    GetSystemMetrics(SM_CYSCREEN) / 2,
+                ))
+            } else {
+                // When we have a parent window, MoveWindow is relative to the position
+                // of the parent.
+                get_window_rect(parent).map(half_size)
+            }
+                .map(|(x, y)| MoveWindow(hwnd, x, y, 1, 1, true));
+        }
+        Ok(hwnd)
     }
 }
 
@@ -233,7 +245,7 @@ impl Drop for Window {
     fn drop(&mut self) {
         // trace!("dropping window");
         unsafe {
-            PostMessageW(self.hwnd, WM_CLOSE, None, None);
+            let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM::default(), LPARAM::default());
         }
     }
 }
