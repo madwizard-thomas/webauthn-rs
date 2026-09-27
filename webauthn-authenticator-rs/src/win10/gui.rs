@@ -62,6 +62,7 @@ use windows::{
         },
     },
 };
+use windows::Win32::Foundation::COLORREF;
 
 /// [WndProc callback handler][wndproc] for our [WINDOW_CLASS].
 ///
@@ -74,7 +75,9 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match msg {
         WM_CLOSE => {
-            DestroyWindow(hwnd);
+            if let Err(e) = DestroyWindow(hwnd) {
+                trace!("Failed to destroy window: {e}");
+            }
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -99,7 +102,7 @@ unsafe fn get_module_handle() -> HINSTANCE {
 
         let icon = LoadIconW(None, IDI_APPLICATION).expect("LoadIconW");
         let wnd_class = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
             style: CS_OWNDC | CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(window_proc),
             cbClsExtra: 0,
@@ -119,6 +122,12 @@ unsafe fn get_module_handle() -> HINSTANCE {
     MODULE_HANDLE
 }
 
+enum SendHwnd{
+    None,
+    Hwnd(HWND)
+}
+unsafe impl Send for SendHwnd {}
+
 /// Window to act as a parent for Windows WebAuthn API.
 pub struct Window {
     hwnd: HWND,
@@ -130,7 +139,7 @@ impl Window {
     /// The window will persist until dropped.
     pub fn new() -> Result<Self, WebauthnCError> {
 
-        let (sender, receiver) = sync_channel::<Option<Self>>(0);
+        let (sender, receiver) = sync_channel::<SendHwnd>(0);
         thread::spawn(move || {
             // trace!("spawned background");
             // let parent = HWND(0);
@@ -138,18 +147,16 @@ impl Window {
 
             let hwnd = match res {
                 Ok(h) => h,
-                Err(e) => {
-                    let _ = sender.send(None);
+                Err(_) => {
+                    let _ = sender.send(SendHwnd::None);
                     return;
                 }
             };
 
             // Now we can tell the main thread that the window is ready
-            if sender.send(Some(Self { hwnd } )).is_err() {
+            if sender.send(SendHwnd::Hwnd(hwnd)).is_err() {
                 return;
             }
-
-            println!("{:?}", hwnd);
 
             // Windows event loop
             let mut msg: MSG = Default::default();
@@ -170,13 +177,12 @@ impl Window {
                     let _ = DispatchMessageW(&msg);
                 }
             }
-
             // trace!("background stopped");
         });
 
         match receiver.recv() {
-            Ok(None)|Err(_) => Err(WebauthnCError::Internal),
-            Ok(Some(window)) => Ok(window),
+            Ok(SendHwnd::None)|Err(_) => Err(WebauthnCError::Internal),
+            Ok(SendHwnd::Hwnd(hwnd)) => Ok(Self { hwnd }),
         }
     }
 
@@ -225,7 +231,9 @@ impl Window {
             if parent.is_invalid() {
                 // When we have an un-parented window, make it invisible
                 // and put it in the centre of the primary screen.
-                SetLayeredWindowAttributes(hwnd, None, 0, LWA_ALPHA);
+                if let Err(e) = SetLayeredWindowAttributes(hwnd, COLORREF::default(), 0, LWA_ALPHA) {
+                    trace!("Tried to make the un-parented window invisible, but failed ({e})")
+                }
                 Some((
                     GetSystemMetrics(SM_CXSCREEN) / 2,
                     GetSystemMetrics(SM_CYSCREEN) / 2,
